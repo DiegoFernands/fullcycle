@@ -8,7 +8,7 @@ import (
 type Book struct {
 	Order         []*Order
 	Transactions  []*Transaction
-	OrdersChan    chan *Order
+	OrdersChan    chan *Order // input
 	OrdersChanOut chan *Order
 	Wg            *sync.WaitGroup
 }
@@ -18,7 +18,7 @@ func NewBook(orderChan chan *Order, orderChanOut chan *Order, wg *sync.WaitGroup
 		Order:         []*Order{},
 		Transactions:  []*Transaction{},
 		OrdersChan:    orderChan,
-		OrdersChanOut: orderChan,
+		OrdersChanOut: orderChanOut,
 		Wg:            wg,
 	}
 }
@@ -41,35 +41,37 @@ func (b *Book) Trade() {
 		}
 
 		if sellOrders[asset] == nil {
-			buyOrders[asset] = NewOrderQueue()
+			sellOrders[asset] = NewOrderQueue()
 			heap.Init(sellOrders[asset])
 		}
 
 		if order.OrderType == "BUY" {
 			buyOrders[asset].Push(order)
-			if sellOrders[asset].len() > 0 && sellOrders[asset].Orders[0].Price <= order.Price {
+			if sellOrders[asset].Len() > 0 && sellOrders[asset].Orders[0].Price <= order.Price {
 				sellOrder := sellOrders[asset].Pop().(*Order)
 				if sellOrder.PendingShares > 0 {
-					transaction := NewTrasaction(sellOrder, order, order.Shares, sellOrder.Price)
+					transaction := NewTransaction(sellOrder, order, order.Shares, sellOrder.Price)
 					b.AddTransaction(transaction, b.Wg)
-					sellOrder.Transaction = append(sellOrder.Transaction, transaction)
+					sellOrder.Transactions = append(sellOrder.Transactions, transaction)
+					order.Transactions = append(order.Transactions, transaction)
 					b.OrdersChanOut <- sellOrder
-					b.OrdersChan <- order
+					b.OrdersChanOut <- order
 					if sellOrder.PendingShares > 0 {
-						sellOrders[asset].Push(sellOrders)
+						sellOrders[asset].Push(sellOrder)
 					}
 				}
 			}
 		} else if order.OrderType == "SELL" {
 			sellOrders[asset].Push(order)
-			if buyOrders[asset].len() > 0 && buyOrders[asset].Orders[0].Price >= order.Price {
+			if buyOrders[asset].Len() > 0 && buyOrders[asset].Orders[0].Price >= order.Price {
 				buyOrder := buyOrders[asset].Pop().(*Order)
 				if buyOrder.PendingShares > 0 {
-					transaction := NewTrasaction(order, buyOrder, order.Shares, buyOrder.Price)
+					transaction := NewTransaction(order, buyOrder, order.Shares, buyOrder.Price)
 					b.AddTransaction(transaction, b.Wg)
-					buyOrder.Transaction = append(buyOrder.Transaction, transaction)
+					buyOrder.Transactions = append(buyOrder.Transactions, transaction)
+					order.Transactions = append(order.Transactions, transaction)
 					b.OrdersChanOut <- buyOrder
-					b.OrdersChan <- order
+					b.OrdersChanOut <- order
 					if buyOrder.PendingShares > 0 {
 						buyOrders[asset].Push(buyOrder)
 					}
@@ -97,9 +99,7 @@ func (b *Book) AddTransaction(transaction *Transaction, wg *sync.WaitGroup) {
 	transaction.AddBuyOrderPendingShares(-minShares)
 
 	transaction.CalculateTotal(transaction.Shares, transaction.BuyingOrder.Price)
-
 	transaction.CloseBuyOrder()
 	transaction.CloseSellOrder()
-
 	b.Transactions = append(b.Transactions, transaction)
 }
